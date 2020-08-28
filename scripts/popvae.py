@@ -9,7 +9,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, ParameterGrid
 
 import allel
 import h5py
@@ -489,6 +489,69 @@ def train_model(vae, encoder, dc, samples, traingen, testgen, user_args):
 
     return history, vae, vaetime
 
+def grid_search(dc, samples, traingen, testgen, train_samples, test_samples, user_args):
+    """Grid search through network parameterizations
+    - Iterates through next set of parameters
+    - Creates net
+    - Trains net
+    - Gets best losses and spits out optimal width and depth to use for optimal encoder
+
+    Args:
+        depth_range (str): Ranges of depths to test
+        width_range (str): Range of widths to test
+        patience (int): Patience parameter for early stopping
+        traingen (ndarray): Training genotypes
+        testgen (ndarray): Testing genotypes
+        train_samples (ndarray): Training samples
+        test_samples (ndarray): Testing samples
+        latent_dim (int): Number of latent dimensions
+        out (str): Output file prefix
+
+    Returns:
+        int: Best width
+        int: Best depth
+
+    TODO: Implement OOB gridsearch here, should be pretty straightfoward to swap this over to an API
+    TODO: Optimize more than 2 hyperparameters, reliant on above for easy implementation
+
+    """
+
+    #grid search on network sizes. Getting OOM errors on 256 networks when run in succession -- GPU memory not clearing on new compile? unclear.
+    #Wonder if switching to something pre-written would help? Talos, for example?
+    print('Running grid search on network sizes')
+    user_args.patience = user_args.patience / 4 #Why is this happening? To reduce time?
+
+    param_grid = {}
+    param_grid['width'] = [x for x in user_args.width_range]
+    param_grid['depth'] = [y for y in user_args.depth_range]
+    # This is extensible to any number of parameters you can feed to the model
+    # All possible permutations stored as a list of dicts, can then expand out and iterate
+    paramlist = list(ParameterGrid(param_grid))
+
+    #Output dataframe
+    param_losses=pd.DataFrame()
+    param_losses['width']=None
+    param_losses['depth']=None
+    param_losses['val_loss']=None
+    #Additional parameters in the grid would mean you'd have to expand this functionality
+
+    #params=paramsets[0]
+    for paramset in tqdm(paramlist):
+        width=paramset['width']
+        depth=paramset['depth']
+        print('width='+str(width)+'\ndepth='+str(depth))
+                                                                    
+        vae, encoder, input_seq, output_seq = create_vae(traingen, width, depth, user_args.latent_dim)
+    
+        t1=time.time()
+
+        history, vae, vaetime = train_model(vae, encoder, dc, samples, traingen, testgen, user_args)
+        param_losses = append_min_losses(history, width, depth, param_losses)
+
+    best_width, best_depth = get_best_losses(param_losses, user_args)
+
+    return best_width, best_depth
+
 def append_min_losses(history, width, depth, param_losses):
     """Gets minimum loss from history and returns to param_losses dataframe
 
@@ -556,65 +619,6 @@ def final_model_run(width, depth, dc, samples, traingen, testgen, train_samples,
     vatime = t2-t1
 
     return history, vae, vaetime
-
-def grid_search(dc, samples, traingen, testgen, train_samples, test_samples, user_args):
-    """Grid search through network parameterizations
-    - Iterates through next set of parameters
-    - Creates net
-    - Trains net
-    - Gets best losses and spits out optimal width and depth to use for optimal encoder
-
-    Args:
-        depth_range (str): Ranges of depths to test
-        width_range (str): Range of widths to test
-        patience (int): Patience parameter for early stopping
-        traingen (ndarray): Training genotypes
-        testgen (ndarray): Testing genotypes
-        train_samples (ndarray): Training samples
-        test_samples (ndarray): Testing samples
-        latent_dim (int): Number of latent dimensions
-        out (str): Output file prefix
-
-    Returns:
-        int: Best width
-        int: Best depth
-
-    TODO: Implement OOB gridsearch here, should be pretty straightfoward to swap this over to an API
-    TODO: Optimize more than 2 hyperparameters, reliant on above for easy implementation
-
-    """
-
-    #grid search on network sizes. Getting OOM errors on 256 networks when run in succession -- GPU memory not clearing on new compile? unclear.
-    #Wonder if switching to something pre-written would help? Talos, for example?
-    print('Running grid search on network sizes')
-    user_args.patience = user_args.patience / 4
-
-    #get parameter combinations (will need to rework this for >2 params)
-    # OOB gridsearch will make that ^ very easy -Logan
-    paramsets=[[x,y] for x in user_args.width_range for y in user_args.depth_range]
-
-    #output dataframe
-    param_losses=pd.DataFrame()
-    param_losses['width']=None
-    param_losses['depth']=None
-    param_losses['val_loss']=None
-
-    #params=paramsets[0]
-    for params in tqdm(paramsets):
-        width=params[0]
-        depth=params[1]
-        print('width='+str(width)+'\ndepth='+str(depth))
-                                                                    
-        vae, encoder, input_seq, output_seq = create_vae(traingen, width, depth, user_args.latent_dim)
-    
-        t1=time.time()
-
-        history, vae, vaetime = train_model(vae, encoder, dc, samples, traingen, testgen, user_args)
-        param_losses = append_min_losses(history, width, depth, param_losses)
-
-    best_width, best_depth = get_best_losses(param_losses, user_args)
-
-    return best_width, best_depth
 
 def save_training_history(history, out):
     """Saves history to text file
